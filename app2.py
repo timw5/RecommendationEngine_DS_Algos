@@ -7,6 +7,11 @@ from sklearn.cluster import KMeans
 import Levenshtein
 warnings.simplefilter(action='ignore', category=FutureWarning)
 # this is because of a recent pandas update issue ^
+import nltk
+import string
+from nltk import word_tokenize
+from nltk.corpus import stopwords
+nltk.download('stopwords')
 
 
 class App:
@@ -21,7 +26,7 @@ class App:
         self.currrecs = None
         self.ogdf = pd.read_csv('movies.csv')
         self.df = self.ogdf.copy(deep=True)
-
+        self.max_Length = self.ogdf['title'].str.len().max()
     def start(self):
         while(True):
             print('\n\nSearch for a movie to begin generating recommendations')
@@ -130,9 +135,9 @@ class App:
         filtermap = {'1': self.cosine_with_description, '2': self.levenstein_with_title, '3': self.filterYears}
         filtermap2 = {'1': 'Cosine Similarity with Description', '2': 'Levenstein Distance with Title',
                       '3': 'Euclidean Distance with Year'}
-        options = [{'1': 'Use cosine similarity on the description of the movies'},
-                   {'2': 'Use Levenstein Distance on the title of the movies'},
-                   {'3': 'Use Euclidean Distance on the year of the movies'}]
+        options = [{'1': 'Use Cosine-Similarity on the Description of the movies\n'},
+                   {'2': 'Use Levenstein-Distance on the Title of the movies\n'},
+                   {'3': 'Use Euclidean Distance on the Year of the movies\n'}]
         counts = 0
         selection = ''
         while counts < 3 or selection != '0':
@@ -194,11 +199,11 @@ class App:
             print('current weights:   ')
             for item in self.weights:
                 for key, value in item.items():
-                    print(f'Filter: {key}\nWith a Weight of: {value}')
+                    print(f'Filter: {key}  With a Weight of: {value}')
                     currweight += value
             print(f'Total Weight of current filters: {currweight}')
             weightleft = 100 - currweight
-            print(f'you have {weightleft} left to assign')
+            print(f'You have {weightleft} left to assign')
         else:
             print('No weights have been assigned yet, you have up to 100 to assign')
         while True:
@@ -245,7 +250,7 @@ class App:
             selected_genres = self.selections['genres']
             Y = vectorizer.transform(selected_genres)
             prediction = kmeans.predict(Y)
-            clustered_movies = self.ogdf[self.ogdf['genre_cluster'] == prediction]
+            clustered_movies = self.ogdf[self.ogdf['genre_cluster'] == int(prediction)]
             self.ogdf = clustered_movies
         else:
             titles = self.ogdf['title']
@@ -257,26 +262,34 @@ class App:
             selected_titles = self.selections['title']
             Y = vectorizer.transform(selected_titles)
             prediction = kmeans.predict(Y)
-            clustered_movies = self.ogdf[self.ogdf['title_cluster'] == prediction]
+            clustered_movies = self.ogdf[self.ogdf['title_cluster'] == int(prediction)]
             self.ogdf = clustered_movies
-
+            
+    @staticmethod    
+    def CleanupText(text):
+        stop = set(stopwords.words('english') + list(string.punctuation))
+        tokens = word_tokenize(text)
+        x = " ".join([i.lower() for i in tokens if i.lower() not in stop and len(i) > 2])
+        return x 
+    
     @staticmethod
     def cosine_with_description(base, comparison):
-        
         tfid = TfidfVectorizer(stop_words='english')
-        tfidf_matrix = tfid.fit_transform((base, comparison['plot']))
+        tfidf_matrix = tfid.fit_transform((App.CleanupText(base), App.CleanupText(comparison['plot'])))
         results = cosine_similarity(tfidf_matrix[0], tfidf_matrix[1])
-        return results[0][0]
+        return (results[0][0])*100
 
     @staticmethod
-    def levenstein_with_title(base, comparison):
+    def levenstein_with_title(base, comparison, max):
         b_title = " ".join(base)
         if not isinstance(comparison, str):
             comparison = " ".join(comparison)
-        return Levenshtein.distance(b_title, comparison)
+        
+        return (Levenshtein.distance(App.CleanupText(b_title), App.CleanupText(comparison))/max)*100
 
         
     def processFilters(self):
+        print('Generating Recommendations....', end='')
         genres_weighted_dictionary = {'total': 0}
         desc = self.selections['plot'].values
         desc = ' '.join(desc)
@@ -298,11 +311,15 @@ class App:
         self.filterYears()
         self.ogdf = self.ogdf[self.ogdf['stars'] >= 6]
         self.ogdf = self.ogdf[self.ogdf['rating'].isin(['R', 'PG-13', 'PG', 'G', 'NC-17'])]
-        self.ogdf['cos_sim'] = self.ogdf.apply(lambda x: self.cosine_with_description(desc, x), axis=1)
-        self.ogdf['lev_dist'] = self.ogdf.apply(lambda x: self.levenstein_with_title(self.selections['title'], x['title']), axis=1)
+        self.ogdf['cos_sim'] = self.ogdf.apply(lambda x: self.cosine_with_description(desc, x ), axis=1)
+        self.ogdf['lev_dist'] = self.ogdf.apply(lambda x: self.levenstein_with_title(self.selections['title'], x['title'], self.max_Length), axis=1)
         self.ogdf['score'] = self.ogdf['cos_sim'] * cs + self.ogdf['lev_dist'] * lv
+        self.ogdf.drop(['cos_sim', 'lev_dist'], axis=1, inplace=True)
+        self.ogdf = self.ogdf[~self.ogdf['title'].isin(self.selections['title'])]
         self.ogdf = self.ogdf.sort_values(by='score', ascending=False)
+        print('done')
 
+    
     def displayRecs(self):
         while True:
             print('\nYour Selections:\n')
